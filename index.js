@@ -29,14 +29,20 @@ const MINHA_CHAVE_PIX = "00020126470014BR.GOV.BCB.PIX0125julianalevino@hotmail.c
 async function iniciarSistema() {
     try {
         console.log("⏳ Verificando banco de dados...");
+        // Tabela de usuários e keys que você já tem
         await dbMySQL.query(`CREATE TABLE IF NOT EXISTS usuarios (usuario VARCHAR(255) PRIMARY KEY, senha VARCHAR(255), expiracao DATE)`);
         await dbMySQL.query(`CREATE TABLE IF NOT EXISTS \`keys\` (\`key\` VARCHAR(255) PRIMARY KEY, dias INTEGER, status VARCHAR(50) DEFAULT 'disponivel')`);
+        
+        // ADICIONE ESTA LINHA: Necessária para a rota /login não falhar
+        await dbMySQL.query(`CREATE TABLE IF NOT EXISTS registros_usuarios (id_discord VARCHAR(255), ip_atual VARCHAR(50), hwid_atual VARCHAR(255), data_registro DATETIME)`);
+        
         console.log("✅ Banco de dados MySQL pronto!");
         client.login(process.env.TOKEN);
     } catch (error) {
         console.error("❌ Falha crítica ao iniciar:", error.message);
     }
 }
+
 iniciarSistema();
 
 // Função de Logs
