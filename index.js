@@ -107,7 +107,7 @@ app.post('/validar-key', async (req, res) => {
     }
 
     try {
-        const [rows] = await dbMySQL.query("SELECT * FROM `keys` WHERE `key` = ?", [key]);
+        const [rows] = await dbMySQL.query("SELECT * FROM `keys` WHERE `key_code` = ?", [key]);
         
         if (rows.length === 0) {
             return res.json({ success: false, message: "Key inválida!" });
@@ -118,7 +118,7 @@ app.post('/validar-key', async (req, res) => {
         return res.json({ 
             success: true, 
             status: keyData.status,
-            dias: keyData.dias,
+            dias: keyData.duracao_dias,
             message: keyData.status === 'disponivel' ? 'Key válida!' : 'Key já foi usada!'
         });
     } catch (err) {
@@ -165,7 +165,7 @@ app.post('/web-registro', async (req, res) => {
 
     try {
         // Verificar se a key existe e está disponível
-        const [keyRows] = await dbMySQL.query("SELECT dias FROM `keys` WHERE `key` = ? AND status = 'disponivel'", [key]);
+        const [keyRows] = await dbMySQL.query("SELECT duracao_dias FROM `keys` WHERE `key_code` = ? AND status = 'disponivel'", [key]);
         
         if (keyRows.length === 0) {
             return res.status(400).json({ success: false, message: "Key inválida ou já foi usada!" });
@@ -174,13 +174,13 @@ app.post('/web-registro', async (req, res) => {
         // Criar usuário
         await dbMySQL.query(
             "INSERT INTO usuarios (usuario, senha, expiracao) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY))", 
-            [usuario, senha, keyRows[0].dias]
+            [usuario, senha, keyRows[0].duracao_dias]
         );
 
         // Marcar key como usada
-        await dbMySQL.query("UPDATE `keys` SET status = 'usada', used_by = ? WHERE `key` = ?", [usuario, key]);
+        await dbMySQL.query("UPDATE `keys` SET status = 'usada', used_by = ? WHERE `key_code` = ?", [usuario, key]);
 
-        enviarLog("✅ REGISTRO WEB", `Usuário: ${usuario}\nKey: ${key}\nDias: ${keyRows[0].dias}`, 0x00FF00);
+        enviarLog("✅ REGISTRO WEB", `Usuário: ${usuario}\nKey: ${key}\nDias: ${keyRows[0].duracao_dias}`, 0x00FF00);
 
         return res.json({ 
             success: true, 
@@ -246,7 +246,7 @@ client.on('messageCreate', async (message) => {
         let keysGeradas = [];
         for (let i = 0; i < quantidade; i++) {
             const keyGerada = "XMP-" + Math.random().toString(36).substring(2, 10).toUpperCase();
-            await dbMySQL.query("INSERT INTO `keys` (`key`, dias) VALUES (?, ?)", [keyGerada, dias]);
+            await dbMySQL.query("INSERT INTO `keys` (`key_code`, `duracao_dias`) VALUES (?, ?)", [keyGerada, dias]);
             keysGeradas.push(keyGerada);
         }
         
@@ -269,7 +269,7 @@ client.on('messageCreate', async (message) => {
         const key = args[0];
         if (!key) return message.reply("❌ Uso: `!verificarkey XMP-XXXXX`");
         
-        const [rows] = await dbMySQL.query("SELECT * FROM `keys` WHERE `key` = ?", [key]);
+        const [rows] = await dbMySQL.query("SELECT * FROM `keys` WHERE `key_code` = ?", [key]);
         
         if (rows.length === 0) {
             return message.reply("❌ Key não encontrada!");
@@ -282,8 +282,8 @@ client.on('messageCreate', async (message) => {
             .setColor(keyData.status === 'disponivel' ? 0x00FF00 : 0xFF0000)
             .setTitle(`${statusEmoji} INFORMAÇÕES DA KEY`)
             .addFields(
-                { name: "🔑 Key", value: `\`${keyData.key}\``, inline: true },
-                { name: "⏱️ Duração", value: `${keyData.dias} dias`, inline: true },
+                { name: "🔑 Key", value: `\`${keyData.key_code}\``, inline: true },
+                { name: "⏱️ Duração", value: `${keyData.duracao_dias} dias`, inline: true },
                 { name: "📊 Status", value: keyData.status.toUpperCase(), inline: true },
                 { name: "👤 Usado por", value: keyData.used_by || "Ninguém", inline: true },
                 { name: "📅 Criada em", value: new Date(keyData.created_at).toLocaleString('pt-BR'), inline: true }
@@ -301,7 +301,7 @@ client.on('messageCreate', async (message) => {
         const key = args[0];
         if (!key) return message.reply("❌ Uso: `!deletarkey XMP-XXXXX`");
         
-        const [result] = await dbMySQL.query("DELETE FROM `keys` WHERE `key` = ?", [key]);
+        const [result] = await dbMySQL.query("DELETE FROM `keys` WHERE `key_code` = ?", [key]);
         
         if (result.affectedRows === 0) {
             return message.reply("❌ Key não encontrada!");
@@ -324,7 +324,7 @@ client.on('messageCreate', async (message) => {
             return message.reply(`❌ Nenhuma key com status **${status}** encontrada!`);
         }
         
-        const listaKeys = rows.map((k, i) => `${i+1}. \`${k.key}\` - ${k.dias} dias`).join('\n');
+        const listaKeys = rows.map((k, i) => `${i+1}. \`${k.key_code}\` - ${k.duracao_dias} dias`).join('\n');
         
         const embed = new EmbedBuilder()
             .setColor(0x7D26CD)
@@ -475,7 +475,7 @@ client.on('interactionCreate', async (interaction) => {
         const key = interaction.fields.getTextInputValue('campo_key');
 
         try {
-            const [rows] = await dbMySQL.query("SELECT dias FROM `keys` WHERE `key` = ? AND status = 'disponivel'", [key]);
+            const [rows] = await dbMySQL.query("SELECT duracao_dias FROM `keys` WHERE `key_code` = ? AND status = 'disponivel'", [key]);
             
             if (rows.length === 0) {
                 return interaction.reply({ 
@@ -484,17 +484,17 @@ client.on('interactionCreate', async (interaction) => {
                 });
             }
 
-            await dbMySQL.query("INSERT INTO usuarios (usuario, senha, expiracao) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY))", [user, pass, rows[0].dias]);
-            await dbMySQL.query("UPDATE `keys` SET status = 'usada', used_by = ? WHERE `key` = ?", [user, key]);
+            await dbMySQL.query("INSERT INTO usuarios (usuario, senha, expiracao) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY))", [user, pass, rows[0].duracao_dias]);
+            await dbMySQL.query("UPDATE `keys` SET status = 'usada', used_by = ? WHERE `key_code` = ?", [user, key]);
             
             const embedSucesso = new EmbedBuilder()
                 .setColor(0x00FF00)
                 .setTitle('✅ CONTA ATIVADA COM SUCESSO!')
-                .setDescription(`**Usuário:** ${user}\n**Validade:** ${rows[0].dias} dias`)
+                .setDescription(`**Usuário:** ${user}\n**Validade:** ${rows[0].duracao_dias} dias`)
                 .setFooter({ text: "XMP System", iconURL: LOGO_URL })
                 .setTimestamp();
             
-            enviarLog("✅ NOVA ATIVAÇÃO", `Usuário: ${user}\nKey: ${key}\nDias: ${rows[0].dias}\nDiscord: ${interaction.user.tag}`, 0x00FF00);
+            enviarLog("✅ NOVA ATIVAÇÃO", `Usuário: ${user}\nKey: ${key}\nDias: ${rows[0].duracao_dias}\nDiscord: ${interaction.user.tag}`, 0x00FF00);
             
             await interaction.reply({ embeds: [embedSucesso], ephemeral: true });
         } catch (err) {
