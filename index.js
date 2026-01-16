@@ -100,123 +100,102 @@ app.post('/login', async (req, res) => {
 
 // --- ROTA PARA VALIDAR KEY (NOVA) ---
 app.post('/validar-key', async (req, res) => {
-    const { key } = req.body;
-    
-    if (!key) {
-        return res.status(400).json({ success: false, message: "Key não fornecida." });
-    }
+const { key } = req.body;
+    if (!key) return res.status(400).json({ success: false, message: "Key não fornecida." });
 
     try {
         const [rows] = await dbMySQL.query("SELECT * FROM `keys` WHERE `key_code` = ?", [key]);
-        
-        if (rows.length === 0) {
-            return res.json({ success: false, message: "Key inválida!" });
-        }
+        if (rows.length === 0) return res.json({ success: false, message: "Key inválida!" });
 
-        const keyData = rows[0];
-        
         return res.json({ 
             success: true, 
-            status: keyData.status,
-            dias: keyData.duracao_dias,
-            message: keyData.status === 'disponivel' ? 'Key válida!' : 'Key já foi usada!'
+            status: rows[0].status,
+            dias: rows[0].duracao_dias,
+            message: rows[0].status === 'disponivel' ? 'Key válida!' : 'Key já foi usada!'
         });
-    } catch (err) {
-        console.error("Erro validar key:", err);
-        res.status(500).json({ success: false, message: "Erro ao validar key." });
-    }
+    } catch (err) { res.status(500).json({ success: false, message: "Erro ao validar." }); }
 });
 
-// --- ROTA PARA LOGIN WEB (PAINEL) ---
-app.post('/web-login', async (req, res) => {
-    const { usuario, senha } = req.body;
-
-    if (!usuario || !senha) {
-        return res.status(400).json({ success: false, message: "Preencha todos os campos!" });
-    }
-
-    try {
-        const [rows] = await dbMySQL.query("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?", [usuario, senha]);
-
-        if (rows.length === 0) {
-            return res.status(401).json({ success: false, message: "Usuário ou senha incorretos!" });
-        }
-
-        const user = rows[0];
-        
-        return res.json({ 
-            success: true, 
-            message: "Login realizado com sucesso!",
-            usuario: user
-        });
-    } catch (err) {
-        console.error("Erro web-login:", err);
-        res.status(500).json({ success: false, message: "Erro no servidor." });
-    }
-
+// --- ROTA DE REGISTRO WEB CORRIGIDA ---
 app.post('/web-registro', async (req, res) => {
-    const { usuario, senha, key, foto_url } = req.body; // Adicionado foto_url
-    // ... lógica de verificação de key ...
-    await dbMySQL.query(
-        "INSERT INTO usuarios (usuario, senha, expiracao, foto_url) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY), ?)", 
-        [usuario, senha, keyRows[0].duracao_dias, foto_url || null]
-    );
-});
+    const { usuario, senha, key, foto_url } = req.body; 
+    
+    if (!usuario || !senha || !key) {
+        return res.status(400).json({ success: false, message: "Campos obrigatórios faltando!" });
+    }
+
     try {
-        // Verificar se a key existe e está disponível
+        // 1. Verifica a Key
         const [keyRows] = await dbMySQL.query("SELECT duracao_dias FROM `keys` WHERE `key_code` = ? AND status = 'disponivel'", [key]);
         
         if (keyRows.length === 0) {
-            return res.status(400).json({ success: false, message: "Key inválida ou já foi usada!" });
+            return res.status(400).json({ success: false, message: "Key inválida ou usada!" });
         }
 
-        // Criar usuário
+        const dias = keyRows[0].duracao_dias;
+
+        // 2. Cria o Usuário
         await dbMySQL.query(
-            "INSERT INTO usuarios (usuario, senha, expiracao) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY))", 
-            [usuario, senha, keyRows[0].duracao_dias]
+            "INSERT INTO usuarios (usuario, senha, expiracao, foto_url) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY), ?)", 
+            [usuario, senha, dias, foto_url || null]
         );
 
-        // Marcar key como usada
+        // 3. Queima a Key
         await dbMySQL.query("UPDATE `keys` SET status = 'usada', used_by = ? WHERE `key_code` = ?", [usuario, key]);
 
-        enviarLog("✅ REGISTRO WEB", `Usuário: ${usuario}\nKey: ${key}\nDias: ${keyRows[0].duracao_dias}`, 0x00FF00);
+        enviarLog("✅ REGISTRO WEB", `Usuário: ${usuario}\nKey: ${key}\nDias: ${dias}`, 0x00FF00);
+        
+        return res.json({ success: true, message: "Conta criada com sucesso!" });
 
-        return res.json({ 
-            success: true, 
-            message: "Conta criada com sucesso!"
-        });
     } catch (err) {
-        console.error("Erro web-registro:", err);
+        console.error("Erro no registro:", err);
         if (err.code === 'ER_DUP_ENTRY') {
             return res.status(400).json({ success: false, message: "Usuário já existe!" });
         }
-        res.status(500).json({ success: false, message: "Erro ao criar conta." });
+        res.status(500).json({ success: false, message: "Erro interno no servidor." });
     }
-});
-
+}); // <--- O CÓDIGO DEVE TERMINAR AQUI E PULAR DIRETO PARA A FUNÇÃO INICIARSISTEMA
 // --- INICIAR SISTEMA ---
 async function iniciarSistema() {
     try {
         console.log("⏳ Verificando banco Aiven...");
-       // Substitua a linha da tabela usuarios por esta:
-await dbMySQL.query(`CREATE TABLE IF NOT EXISTS usuarios (
-    usuario VARCHAR(255) PRIMARY KEY, 
-    senha VARCHAR(255), 
-    expiracao DATE, 
-    hwid_vinculado VARCHAR(255) DEFAULT NULL, 
-    ip_vinculado VARCHAR(255) DEFAULT NULL, 
-    foto_url TEXT DEFAULT NULL, 
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-)`);
-        await dbMySQL.query(`CREATE TABLE IF NOT EXISTS \`keys\` (\`key\` VARCHAR(255) PRIMARY KEY, dias INTEGER, status VARCHAR(50) DEFAULT 'disponivel', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, used_by VARCHAR(255) DEFAULT NULL)`);
-        await dbMySQL.query(`CREATE TABLE IF NOT EXISTS logs_acesso (id INT AUTO_INCREMENT PRIMARY KEY, usuario VARCHAR(255), acao VARCHAR(255), ip VARCHAR(255), hwid VARCHAR(255), data_hora DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+
+        // 1. Tabela de Usuários
+        await dbMySQL.query(`CREATE TABLE IF NOT EXISTS usuarios (
+            usuario VARCHAR(255) PRIMARY KEY, 
+            senha VARCHAR(255), 
+            expiracao DATE, 
+            hwid_vinculado VARCHAR(255) DEFAULT NULL, 
+            ip_vinculado VARCHAR(255) DEFAULT NULL, 
+            foto_url TEXT DEFAULT NULL, 
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
+
+        // 2. Tabela de Keys (AJUSTADA PARA USAR key_code e duracao_dias)
+        await dbMySQL.query(`CREATE TABLE IF NOT EXISTS \`keys\` (
+            \`key_code\` VARCHAR(255) PRIMARY KEY, 
+            \`duracao_dias\` INTEGER, 
+            \`status\` VARCHAR(50) DEFAULT 'disponivel', 
+            \`created_at\` DATETIME DEFAULT CURRENT_TIMESTAMP, 
+            \`used_by\` VARCHAR(255) DEFAULT NULL
+        )`);
+
+        // 3. Tabela de Logs
+        await dbMySQL.query(`CREATE TABLE IF NOT EXISTS logs_acesso (
+            id INT AUTO_INCREMENT PRIMARY KEY, 
+            usuario VARCHAR(255), 
+            acao VARCHAR(255), 
+            ip VARCHAR(255), 
+            hwid VARCHAR(255), 
+            data_hora DATETIME DEFAULT CURRENT_TIMESTAMP
+        )`);
         
         const PORTA = process.env.PORT || 10000;
         app.listen(PORTA, '0.0.0.0', () => console.log(`✅ API Online na porta ${PORTA}`));
         
         client.login(process.env.TOKEN);
     } catch (error) {
-        console.error("❌ Erro crítico:", error.message);
+        console.error("❌ Erro crítico ao iniciar tabelas:", error.message);
     }
 }
 
@@ -369,6 +348,7 @@ client.on('messageCreate', async (message) => {
     }
 
     // ========== COMANDO: INFO USUÁRIO ==========
+   // ========== COMANDO: INFO USUÁRIO CORRIGIDO ==========
     if (command === 'infousuario' || command === 'info') {
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
             return message.reply("❌ Você não tem permissão!");
@@ -383,14 +363,16 @@ client.on('messageCreate', async (message) => {
         }
         
         const user = rows[0];
-        const diasRestantes = Math.ceil((new Date(user.expiracao) - new Date()) / (1000 * 60 * 60 * 24));
+        const expDate = new Date(user.expiracao);
+        const diasRestantes = Math.ceil((expDate - new Date()) / (1000 * 60 * 60 * 24));
         
         const embed = new EmbedBuilder()
             .setColor(0x7D26CD)
             .setTitle(`👤 INFORMAÇÕES DO USUÁRIO`)
+            .setThumbnail(user.foto_url || LOGO_URL) // Aqui exibe a foto do banco ou a logo se estiver vazio
             .addFields(
                 { name: "👤 Usuário", value: user.usuario, inline: true },
-                { name: "📅 Expira em", value: new Date(user.expiracao).toLocaleDateString('pt-BR'), inline: true },
+                { name: "📅 Expira em", value: expDate.toLocaleDateString('pt-BR'), inline: true },
                 { name: "⏰ Dias Restantes", value: `${diasRestantes} dias`, inline: true },
                 { name: "💻 HWID", value: user.hwid_vinculado || "Não vinculado", inline: false },
                 { name: "🌐 IP", value: user.ip_vinculado || "N/A", inline: false }
