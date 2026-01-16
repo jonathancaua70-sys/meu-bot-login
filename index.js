@@ -153,16 +153,15 @@ app.post('/web-login', async (req, res) => {
         console.error("Erro web-login:", err);
         res.status(500).json({ success: false, message: "Erro no servidor." });
     }
-});
 
-// --- ROTA PARA REGISTRO WEB (PAINEL) ---
 app.post('/web-registro', async (req, res) => {
-    const { usuario, senha, key } = req.body;
-
-    if (!usuario || !senha || !key) {
-        return res.status(400).json({ success: false, message: "Preencha todos os campos!" });
-    }
-
+    const { usuario, senha, key, foto_url } = req.body; // Adicionado foto_url
+    // ... lógica de verificação de key ...
+    await dbMySQL.query(
+        "INSERT INTO usuarios (usuario, senha, expiracao, foto_url) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY), ?)", 
+        [usuario, senha, keyRows[0].duracao_dias, foto_url || null]
+    );
+});
     try {
         // Verificar se a key existe e está disponível
         const [keyRows] = await dbMySQL.query("SELECT duracao_dias FROM `keys` WHERE `key_code` = ? AND status = 'disponivel'", [key]);
@@ -199,7 +198,16 @@ app.post('/web-registro', async (req, res) => {
 async function iniciarSistema() {
     try {
         console.log("⏳ Verificando banco Aiven...");
-        await dbMySQL.query(`CREATE TABLE IF NOT EXISTS usuarios (usuario VARCHAR(255) PRIMARY KEY, senha VARCHAR(255), expiracao DATE, hwid_vinculado VARCHAR(255) DEFAULT NULL, ip_vinculado VARCHAR(255) DEFAULT NULL, created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+       // Substitua a linha da tabela usuarios por esta:
+await dbMySQL.query(`CREATE TABLE IF NOT EXISTS usuarios (
+    usuario VARCHAR(255) PRIMARY KEY, 
+    senha VARCHAR(255), 
+    expiracao DATE, 
+    hwid_vinculado VARCHAR(255) DEFAULT NULL, 
+    ip_vinculado VARCHAR(255) DEFAULT NULL, 
+    foto_url TEXT DEFAULT NULL, 
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`);
         await dbMySQL.query(`CREATE TABLE IF NOT EXISTS \`keys\` (\`key\` VARCHAR(255) PRIMARY KEY, dias INTEGER, status VARCHAR(50) DEFAULT 'disponivel', created_at DATETIME DEFAULT CURRENT_TIMESTAMP, used_by VARCHAR(255) DEFAULT NULL)`);
         await dbMySQL.query(`CREATE TABLE IF NOT EXISTS logs_acesso (id INT AUTO_INCREMENT PRIMARY KEY, usuario VARCHAR(255), acao VARCHAR(255), ip VARCHAR(255), hwid VARCHAR(255), data_hora DATETIME DEFAULT CURRENT_TIMESTAMP)`);
         
@@ -413,6 +421,41 @@ client.on('messageCreate', async (message) => {
         
         message.channel.send({ embeds: [embedPainel], components: [row] });
     }
+    // ========== COMANDO: ALTERAR FOTO USUÁRIO ==========
+    if (command === 'setfoto') {
+        if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+            return message.reply("❌ Sem permissão!");
+        }
+        
+        const usuario = args[0];
+        const novaFoto = args[1];
+
+        if (!usuario || !novaFoto) {
+            return message.reply("❌ Uso: `!setfoto usuario link_da_foto`\n*(Dica: Use links do Imgur ou Discord)*");
+        }
+
+        try {
+            const [result] = await dbMySQL.query("UPDATE usuarios SET foto_url = ? WHERE usuario = ?", [novaFoto, usuario]);
+
+            if (result.affectedRows === 0) {
+                return message.reply("❌ Usuário não encontrado no banco!");
+            }
+
+            const embed = new EmbedBuilder()
+                .setColor(0x00FFFF)
+                .setTitle("📸 FOTO ATUALIZADA")
+                .setDescription(`A foto do usuário **${usuario}** foi alterada com sucesso!`)
+                .setThumbnail(novaFoto)
+                .setTimestamp();
+
+            enviarLog("📸 FOTO ALTERADA", `Admin: ${message.author.tag}\nUsuário: ${usuario}\nNova URL: ${novaFoto}`, 0x00FFFF);
+            message.reply({ embeds: [embed] });
+
+        } catch (err) {
+            console.error(err);
+            message.reply("❌ Erro ao atualizar foto no banco.");
+        }
+    }
 
     // ========== COMANDO: HELP ==========
     if (command === 'help' || command === 'ajuda') {
@@ -431,9 +474,10 @@ client.on('messageCreate', async (message) => {
         message.reply({ embeds: [embed] });
     }
 });
-
-// --- INTERAÇÕES (MODAL) ---
+-
+// --- INTERAÇÕES (MODAL E REGISTRO) ---
 client.on('interactionCreate', async (interaction) => {
+    // 1. ABRIR O MODAL
     if (interaction.isButton() && interaction.customId === 'abrir_registro') {
         const modal = new ModalBuilder()
             .setCustomId('modal_registro')
@@ -463,18 +507,29 @@ client.on('interactionCreate', async (interaction) => {
                     .setPlaceholder('Cole sua key aqui (XMP-XXXXX)')
                     .setStyle(TextInputStyle.Short)
                     .setRequired(true)
+            ),
+            new ActionRowBuilder().addComponents(
+                new TextInputBuilder()
+                    .setCustomId('campo_foto')
+                    .setLabel('URL DA FOTO (OPCIONAL)')
+                    .setPlaceholder('Link da imagem (Ex: Imgur ou Discord)')
+                    .setStyle(TextInputStyle.Short)
+                    .setRequired(false)
             )
         );
         
         await interaction.showModal(modal);
     }
 
+    // 2. PROCESSAR O ENVIO DO MODAL
     if (interaction.isModalSubmit() && interaction.customId === 'modal_registro') {
         const user = interaction.fields.getTextInputValue('campo_usuario');
         const pass = interaction.fields.getTextInputValue('campo_senha');
         const key = interaction.fields.getTextInputValue('campo_key');
+        const foto = interaction.fields.getTextInputValue('campo_foto') || null;
 
         try {
+            // Verifica se a Key é válida
             const [rows] = await dbMySQL.query("SELECT duracao_dias FROM `keys` WHERE `key_code` = ? AND status = 'disponivel'", [key]);
             
             if (rows.length === 0) {
@@ -484,7 +539,13 @@ client.on('interactionCreate', async (interaction) => {
                 });
             }
 
-            await dbMySQL.query("INSERT INTO usuarios (usuario, senha, expiracao) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY))", [user, pass, rows[0].duracao_dias]);
+            // Insere o usuário com a foto_url
+            await dbMySQL.query(
+                "INSERT INTO usuarios (usuario, senha, expiracao, foto_url) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY), ?)", 
+                [user, pass, rows[0].duracao_dias, foto]
+            );
+
+            // Atualiza o status da Key
             await dbMySQL.query("UPDATE `keys` SET status = 'usada', used_by = ? WHERE `key_code` = ?", [user, key]);
             
             const embedSucesso = new EmbedBuilder()
@@ -493,16 +554,17 @@ client.on('interactionCreate', async (interaction) => {
                 .setDescription(`**Usuário:** ${user}\n**Validade:** ${rows[0].duracao_dias} dias`)
                 .setFooter({ text: "XMP System", iconURL: LOGO_URL })
                 .setTimestamp();
+
+            if (foto) embedSucesso.setThumbnail(foto);
             
             enviarLog("✅ NOVA ATIVAÇÃO", `Usuário: ${user}\nKey: ${key}\nDias: ${rows[0].duracao_dias}\nDiscord: ${interaction.user.tag}`, 0x00FF00);
             
             await interaction.reply({ embeds: [embedSucesso], ephemeral: true });
+
         } catch (err) {
             console.error("Erro ao ativar:", err);
-            interaction.reply({ 
-                content: "❌ Erro ao ativar! Usuário já existe ou key inválida.", 
-                ephemeral: true 
-            });
+            const msgErro = err.code === 'ER_DUP_ENTRY' ? "❌ Este usuário já existe!" : "❌ Erro ao ativar no banco de dados.";
+            await interaction.reply({ content: msgErro, ephemeral: true });
         }
     }
 });
