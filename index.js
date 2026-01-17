@@ -8,6 +8,7 @@ const {
 const dbMySQL = require('./db.js');
 const express = require('express');
 const app = express();
+const { joinVoiceChannel } = require('@discordjs/voice');
 
 app.set('trust proxy', true);
 app.use(express.json());
@@ -17,7 +18,8 @@ const client = new Client({
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
-        GatewayIntentBits.GuildMembers
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildVoiceStates
     ]
 });
 
@@ -248,6 +250,35 @@ client.on('messageCreate', async (message) => {
         message.reply({ embeds: [embed] });
     }
 
+    // ========== COMANDO: ENTRAR NA CALL ==========
+    if (command === 'call' || command === 'entrar') {
+        const canalVoz = message.member.voice.channel;
+
+        if (!canalVoz) {
+            return message.reply("❌ Você precisa estar em um canal de voz para eu entrar!");
+        }
+
+        joinVoiceChannel({
+            channelId: canalVoz.id,
+            guildId: message.guild.id,
+            adapterCreator: message.guild.voiceAdapterCreator,
+        });
+
+        message.reply(`✅ Conectado ao canal **${canalVoz.name}**!`);
+    }
+    
+// ========== COMANDO: SAIR DA CALL ==========
+    if (command === 'sair' || command === 'leave') {
+        const { getVoiceConnection } = require('@discordjs/voice');
+        const connection = getVoiceConnection(message.guild.id);
+
+        if (connection) {
+            connection.destroy();
+            message.reply("👋 Saí da call!");
+        } else {
+            message.reply("❌ Eu não estou em nenhum canal de voz!");
+        }
+    }
     // ========== COMANDO: VERIFICAR KEY ==========
     if (command === 'verificarkey' || command === 'vkey') {
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
