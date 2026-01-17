@@ -2,7 +2,7 @@ require("dotenv").config();
 const { Client, GatewayIntentBits, Collection, EmbedBuilder } = require("discord.js");
 const fs = require("fs");
 const path = require("path");
-const dbMySQL = require('./src/database/db.js'); // Ajuste o caminho se necessário
+const dbMySQL = require('./src/database/db.js');
 const { iniciarAPI } = require('./src/api/server.js');
 
 const client = new Client({
@@ -14,31 +14,35 @@ const client = new Client({
     ]
 });
 
-// --- FUNÇÃO DE LOGS NO DISCORD ---
-// Se você criar uma variável LOG_CHANNEL_ID no Render, os logs vão para esse canal.
+// --- FUNÇÃO DE LOGS ---
 const enviarLog = async (client, titulo, descricao, cor = 0x7D26CD) => {
-    const canalLog = client.channels.cache.get(process.env.LOG_CHANNEL_ID);
-    if (!canalLog) return;
+    try {
+        const canalLog = client.channels.cache.get(process.env.LOG_CHANNEL_ID);
+        if (!canalLog) return;
 
-    const embed = new EmbedBuilder()
-        .setTitle(titulo)
-        .setDescription(descricao)
-        .setColor(cor)
-        .setTimestamp();
-    
-    canalLog.send({ embeds: [embed] });
+        const embed = new EmbedBuilder()
+            .setTitle(titulo)
+            .setDescription(descricao)
+            .setColor(cor)
+            .setTimestamp();
+        
+        await canalLog.send({ embeds: [embed] });
+    } catch (err) {
+        console.error("Erro ao enviar log para o canal:", err.message);
+    }
 };
 
 // --- CARREGAR COMANDOS ---
 client.commands = new Collection();
-const commandsPath = path.join(__dirname, "src/commands"); // Caminho da sua pasta de comandos
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(".js"));
-
-for (const file of commandFiles) {
-    const command = require(path.join(commandsPath, file));
-    if (command.name) {
-        client.commands.set(command.name, command);
-        console.log(`✅ Comando carregado: ${file}`);
+const commandsPath = path.join(__dirname, "src/commands");
+if (fs.existsSync(commandsPath)) {
+    const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(".js"));
+    for (const file of commandFiles) {
+        const command = require(path.join(commandsPath, file));
+        if (command.name) {
+            client.commands.set(command.name, command);
+            console.log(`✅ Comando carregado: ${file}`);
+        }
     }
 }
 
@@ -54,21 +58,47 @@ client.on("messageCreate", async (message) => {
     if (!command) return;
 
     try {
-        // Envia exatamente os parâmetros que os arquivos de comando esperam
+        // Passa o dbMySQL e enviarLog para os comandos
         await command.execute(message, args, client, dbMySQL, enviarLog);
     } catch (error) {
-        console.error("Erro no comando:", error);
-        message.reply("❌ Houve um erro interno ao processar este comando!");
+        console.error(`Erro ao executar comando ${commandName}:`, error);
+        message.reply("❌ Ocorreu um erro ao processar este comando no banco de dados.");
     }
 });
 
-// --- INICIALIZAÇÃO ---
-client.once("ready", () => {
-    console.log(`🤖 Bot logado como ${client.user.tag}`);
-    
-    // Inicia a API de login junto com o Bot na mesma porta
-    // Passamos o db, a função de log e o client para a API poder interagir com o Discord
-    iniciarAPI(dbMySQL, enviarLog, client);
+// --- GATEWAY DE INTERAÇÕES (BOTÕES E MODAIS) ---
+client.on("interactionCreate", async (interaction) => {
+    try {
+        const eventHandler = require('./src/events/interactionCreate.js');
+        await eventHandler.execute(interaction, client, dbMySQL, enviarLog);
+    } catch (error) {
+        console.error("Erro ao processar interação:", error);
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({ content: "❌ Erro interno ao processar sua solicitação.", ephemeral: true });
+        }
+    }
 });
+
+// --- INICIALIZAÇÃO COM VERIFICAÇÃO DE BANCO ---
+client.once("ready", async () => {
+    console.log(`🤖 Bot logado como ${client.user.tag}`);
+
+    try {
+        console.log("⏳ Testando conexão com MySQL na Aiven...");
+        // O MySQL da Aiven pode demorar a responder no primeiro ping
+        await dbMySQL.query("SELECT 1");
+        console.log("✅ Conexão MySQL: OK");
+
+        // Só inicia a API se o banco de dados estiver funcionando
+        iniciarAPI(dbMySQL, enviarLog, client);
+    } catch (err) {
+        console.error("❌ ERRO CRÍTICO: Não foi possível conectar ao banco de dados!");
+        console.error("Detalhe do erro:", err.message);
+        console.log("⚠️ Verifique se o IP 0.0.0.0/0 está liberado no painel da Aiven.");
+    }
+});
+
+// Tratamento de erros globais para evitar que o bot caia no Render
+process.on('unhandledRejection', error => console.error('Erro não tratado:', error));
 
 client.login(process.env.TOKEN);
