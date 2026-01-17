@@ -8,7 +8,7 @@ const {
 const dbMySQL = require('./db.js');
 const express = require('express');
 const app = express();
-const { joinVoiceChannel } = require('@discordjs/voice');
+const { joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
 
 app.set('trust proxy', true);
 app.use(express.json());
@@ -266,19 +266,20 @@ client.on('messageCreate', async (message) => {
 
         message.reply(`✅ Conectado ao canal **${canalVoz.name}**!`);
     }
-    
-// ========== COMANDO: SAIR DA CALL ==========
-    if (command === 'sair' || command === 'leave') {
-        const { getVoiceConnection } = require('@discordjs/voice');
-        const connection = getVoiceConnection(message.guild.id);
 
-        if (connection) {
-            connection.destroy();
-            message.reply("👋 Saí da call!");
-        } else {
-            message.reply("❌ Eu não estou em nenhum canal de voz!");
-        }
+// ========== COMANDO: SAIR DA CALL ==========
+if (command === 'sair' || command === 'leave') {
+    const connection = getVoiceConnection(message.guild.id);
+
+    if (connection) {
+        connection.destroy();
+        enviarLog("🔈 BOT SAIU DA CALL", `Admin: ${message.author.tag}`, 0xFF0000);
+        message.reply("👋 Saí da call!");
+    } else {
+        message.reply("❌ Eu não estou em nenhum canal de voz!");
     }
+}
+
     // ========== COMANDO: VERIFICAR KEY ==========
     if (command === 'verificarkey' || command === 'vkey') {
         if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
