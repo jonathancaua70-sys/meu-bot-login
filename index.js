@@ -583,8 +583,16 @@ client.on('interactionCreate', async (interaction) => {
     }
 });
 
-// --- BOT ONLINE ---
+// --- STATUS DO PERFIL ---
 client.on('ready', () => {
     console.log(`✅ Bot online como ${client.user.tag}`);
-    client.user.setActivity('XMP System | !help', { type: 'PLAYING' });
+    
+    // Define o status: 'PLAYING', 'WATCHING', 'LISTENING' ou 'COMPETING'
+    client.user.setPresence({
+        activities: [{ 
+            name: 'XMP System | !help', 
+            type: 0 // 0 é o tipo 'Jogando'
+        }],
+        status: 'online', // Pode ser 'online', 'idle' (ausente) ou 'dnd' (não perturbe)
+    });
 });
