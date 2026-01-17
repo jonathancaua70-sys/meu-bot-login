@@ -4,7 +4,10 @@ const fs = require("fs");
 const path = require("path");
 const express = require("express");
 const app = express();
-const dbMySQL = require('./db.js');
+
+// --- CORREÇÃO DO CAMINHO DO BANCO DE DADOS ---
+// Antes estava './db.js', mas seu arquivo está em 'src/database/db.js'
+const dbMySQL = require('./src/database/db.js');
 
 const client = new Client({
     intents: [
@@ -16,25 +19,29 @@ const client = new Client({
     ]
 });
 
-// Coleções para comandos
 client.commands = new Collection();
 
-// --- CARREGAR COMANDOS DA PASTA /commands ---
-const commandsPath = path.join(__dirname, "commands");
-const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(".js"));
+// --- CORREÇÃO DO CAMINHO DOS COMANDOS ---
+// Precisamos incluir a pasta "src" no caminho
+const commandsPath = path.join(__dirname, "src", "commands");
 
-for (const file of commandFiles) {
-    const filePath = path.join(commandsPath, file);
-    const command = require(filePath);
-    
-    // Verifica se o arquivo tem a estrutura correta para ser carregado
-    if (command.name) {
-        client.commands.set(command.name, command);
-        console.log(`✅ Comando carregado: ${file}`);
+if (fs.existsSync(commandsPath)) {
+    const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(".js"));
+
+    for (const file of commandFiles) {
+        const filePath = path.join(commandsPath, file);
+        const command = require(filePath);
+        
+        if (command.name) {
+            client.commands.set(command.name, command);
+            console.log(`✅ Comando carregado: ${file}`);
+        }
     }
+} else {
+    console.error("❌ Erro: Pasta src/commands não encontrada!");
 }
 
-// --- GATEWAY DE MENSAGENS (Executa os comandos) ---
+// --- GATEWAY DE MENSAGENS ---
 client.on("messageCreate", async (message) => {
     const PREFIXO = "!";
     if (!message.content.startsWith(PREFIXO) || message.author.bot) return;
@@ -54,15 +61,18 @@ client.on("messageCreate", async (message) => {
     }
 });
 
-// --- API EXPRESS (Para o Painel e Health Check) ---
+// --- API EXPRESS ---
 app.use(express.json());
 app.get('/', (req, res) => res.send("XMP API Online"));
 
-// Aqui você pode colocar as rotas de /login e /web-registro que estavam no código anterior
-// ...
+// Rota de login (Exemplo para o seu .exe)
+app.post('/login', async (req, res) => {
+    // A lógica de login deve ser importada ou escrita aqui
+    res.json({ message: "API Pronta para receber logins" });
+});
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`🚀 API Rodando na porta ${PORT}`));
+app.listen(PORT, '0.0.0.0', () => console.log(`🚀 API Rodando na porta ${PORT}`));
 
 client.once("ready", () => {
     console.log(`🤖 Bot logado como ${client.user.tag}`);
