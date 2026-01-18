@@ -53,7 +53,6 @@ client.on("messageCreate", async (message) => {
     if (!command) return;
 
     try {
-        // Passa dbMySQL e enviarLog para os comandos usarem
         await command.execute(message, args, client, dbMySQL, enviarLog);
     } catch (error) {
         console.error("Erro no comando:", error);
@@ -61,10 +60,10 @@ client.on("messageCreate", async (message) => {
     }
 });
 
-// --- LISTENER DE INTERAÇÕES (SISTEMA DE RESGATE POR BOTÃO) ---
+// --- LISTENER DE INTERAÇÕES (RESGATE E VENDAS) ---
 client.on('interactionCreate', async (interaction) => {
     
-    // 1. Abrir Modal ao clicar no botão 'abrir_registro'
+    // 1. SISTEMA DE RESGATE (MODAL)
     if (interaction.isButton() && interaction.customId === 'abrir_registro') {
         const modal = {
             title: 'Ativação de Licença XMP',
@@ -84,18 +83,15 @@ client.on('interactionCreate', async (interaction) => {
         return await interaction.showModal(modal);
     }
 
-    // 2. Processar Resgate das 4 Tabelas
     if (interaction.isModalSubmit() && interaction.customId === 'modal_resgate') {
         const keyInput = interaction.fields.getTextInputValue('input_key').trim();
         const tabelas = ['keys_ext_adv', 'keys_ext_pre', 'keys_int_adv', 'keys_int_pre'];
-        
         await interaction.deferReply({ ephemeral: true });
 
         try {
             let keyEncontrada = null;
             let planoAlvo = "";
 
-            // Varredura nas tabelas de keys
             for (const tabela of tabelas) {
                 const [rows] = await dbMySQL.query(`SELECT * FROM \`${tabela}\` WHERE \`codigo\` = ? AND \`status\` = 'disponivel'`, [keyInput]);
                 if (rows.length > 0) {
@@ -105,11 +101,8 @@ client.on('interactionCreate', async (interaction) => {
                 }
             }
 
-            if (!keyEncontrada) {
-                return interaction.editReply("❌ Key inválida ou já utilizada.");
-            }
+            if (!keyEncontrada) return interaction.editReply("❌ Key inválida ou já utilizada.");
 
-            // Atualiza usuário (Soma tempo ou cria novo)
             await dbMySQL.query(`
                 INSERT INTO usuarios (usuario, plano, expiracao) 
                 VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))
@@ -118,18 +111,71 @@ client.on('interactionCreate', async (interaction) => {
                 expiracao = IF(expiracao > NOW(), DATE_ADD(expiracao, INTERVAL ? DAY), DATE_ADD(NOW(), INTERVAL ? DAY))
             `, [interaction.user.id, planoAlvo, keyEncontrada.dias, keyEncontrada.dias, keyEncontrada.dias]);
 
-            // Desativa a key
             await dbMySQL.query(`UPDATE \`keys_${planoAlvo}\` SET status = 'usada', usada_por = ? WHERE codigo = ?`, [interaction.user.tag, keyInput]);
-
-            // Log no canal de logs
-            enviarLog(client, "🔑 LICENÇA ATIVADA", `**Usuário:** <@${interaction.user.id}>\n**Plano:** ${planoAlvo.toUpperCase()}\n**Dias:** ${keyEncontrada.dias}\n**Key:** \`${keyInput}\``, 0x00FF00);
-
-            return interaction.editReply(`✅ **Sucesso!** Plano **${planoAlvo.toUpperCase()}** ativado por **${keyEncontrada.dias} dias**.`);
-
+            enviarLog(client, "🔑 LICENÇA ATIVADA", `**Usuário:** <@${interaction.user.id}>\n**Plano:** ${planoAlvo.toUpperCase()}\n**Key:** \`${keyInput}\``, 0x00FF00);
+            return interaction.editReply(`✅ **Sucesso!** Plano **${planoAlvo.toUpperCase()}** ativado.`);
         } catch (error) {
             console.error(error);
             return interaction.editReply("❌ Erro ao acessar o banco de dados.");
         }
+    }
+
+    // 2. SISTEMA DE VENDAS (PROCESSAR BOTÕES DE COMPRA)
+    if (interaction.isButton() && interaction.customId.startsWith('buy_')) {
+        const produtoTipo = interaction.customId.replace('buy_', ''); // ex: int_adv
+        
+        const mapeamentoTabelas = {
+            'int_adv': 'produto_internal_advanced',
+            'int_pre': 'produto_internal_premium',
+            'ext_adv': 'produto_external_advanced',
+            'ext_pre': 'produto_external_premium'
+        };
+
+        const tabelaAlvo = mapeamentoTabelas[produtoTipo];
+
+        try {
+            await interaction.reply({ content: `🔎 Iniciando pedido de **${produtoTipo.toUpperCase()}**...`, ephemeral: true });
+
+            const [prodData] = await dbMySQL.query(`SELECT * FROM ${tabelaAlvo} LIMIT 1`);
+            const [estoque] = await dbMySQL.query(`SELECT COUNT(*) as total FROM keys_${produtoTipo} WHERE status = 'disponivel'`);
+
+            if (estoque[0].total <= 0) return interaction.editReply("❌ Desculpe, estamos sem estoque para este item.");
+
+            const embedCupom = new EmbedBuilder()
+                .setTitle("🎟️ Cupom de Desconto")
+                .setDescription("Digite seu cupom no chat ou escreva `pular` para continuar.")
+                .setColor("#7D26CD");
+
+            await interaction.editReply({ embeds: [embedCupom] });
+
+            const filter = m => m.author.id === interaction.user.id;
+            const collector = interaction.channel.createMessageCollector({ filter, time: 30000, max: 1 });
+
+            collector.on('collect', async (m) => {
+                let valorFinal = parseFloat(prodData[0].preco);
+                let descontoTexto = "Nenhum";
+
+                if (m.content.toLowerCase() !== 'pular') {
+                    const [cupom] = await dbMySQL.query("SELECT * FROM cupons WHERE codigo = ? AND usos_restantes > 0", [m.content.toUpperCase()]);
+                    if (cupom.length > 0) {
+                        valorFinal -= (valorFinal * (cupom[0].desconto_porcentagem / 100));
+                        descontoTexto = `${cupom[0].desconto_porcentagem}%`;
+                    }
+                }
+                
+                const embedPagamento = new EmbedBuilder()
+                    .setTitle("💳 Pagamento Gerado")
+                    .setDescription(`Produto: **${produtoTipo.toUpperCase()}**\nValor: **R$ ${valorFinal.toFixed(2)}**\nDesconto: **${descontoTexto}**`)
+                    .setColor("#00FF00");
+
+                const rowPag = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`pix_gen_${produtoTipo}_${valorFinal}`).setLabel('Gerar QR Code Pix').setStyle(ButtonStyle.Success)
+                );
+
+                await interaction.followUp({ embeds: [embedPagamento], components: [rowPag], ephemeral: true });
+                if (m.deletable) m.delete();
+            });
+        } catch (error) { console.error(error); }
     }
 });
 
