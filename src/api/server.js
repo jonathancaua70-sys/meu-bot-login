@@ -1,0 +1,120 @@
+const express = require('express');
+const app = express();
+
+app.use(express.json());
+app.set('trust proxy', true);
+
+// Esta função é chamada no seu index.js
+function iniciarAPI(dbMySQL, enviarLog, client) {
+
+    // --- ROTA HEALTH CHECK (Para o Render saber que o bot está vivo) ---
+    app.get('/', (req, res) => {
+        res.json({ 
+            status: 'online', 
+            uptime: Math.floor(process.uptime()),
+            message: 'XMP System API is running!' 
+        });
+    });
+
+    // --- ROTA DE LOGIN DO PAINEL (.EXE) ---
+    app.post('/login', async (req, res) => {
+        let { usuario, senha, hwid, ip } = req.body;
+        
+        // Captura o IP real do usuário através do proxy do Render
+        const ipReal = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+        const finalIp = (ip === "0.0.0.0" || !ip) ? ipReal : ip;
+
+        if (!usuario || !senha || !hwid) {
+            return res.status(400).json({ success: false, message: "Dados incompletos." });
+        }
+
+        try {
+            // Busca o usuário na tabela que você criou no HeidiSQL
+            const [rows] = await dbMySQL.query("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?", [usuario, senha]);
+
+            if (rows.length > 0) {
+                const userDb = rows[0];
+
+                // 1. Verifica Expiração
+                if (new Date() > new Date(userDb.expiracao)) {
+                    return res.status(403).json({ success: false, message: "Sua licença expirou!" });
+                }
+
+                // 2. Vincula HWID se estiver vazio (Primeiro Acesso)
+                if (!userDb.hwid_vinculado) {
+                    await dbMySQL.query("UPDATE usuarios SET hwid_vinculado = ?, ip_vinculado = ? WHERE usuario = ?", [hwid, finalIp, usuario]);
+                    
+                    if (enviarLog) {
+                        enviarLog(client, "💻 NOVO HWID VINCULADO", `Usuário: ${usuario}\nPC: ${hwid}`, 0xFFFF00, process.env.LOGO_URL);
+                    }
+                    return res.json({ success: true, message: "PC Vinculado com sucesso!" });
+                }
+
+                // 3. Verifica se o HWID é o mesmo que está no banco
+                if (userDb.hwid_vinculado !== hwid) {
+                    return res.status(403).json({ success: false, message: "Usuário já vinculado a outro PC!" });
+                }
+
+                // 4. Atualiza IP e libera acesso
+                await dbMySQL.query("UPDATE usuarios SET ip_vinculado = ? WHERE usuario = ?", [finalIp, usuario]);
+                
+                // Salva no log de acesso que você criou
+                await dbMySQL.query("INSERT INTO logs_acesso (usuario, acao, ip, hwid) VALUES (?, ?, ?, ?)", 
+                    [usuario, 'Login com Sucesso', finalIp, hwid]);
+
+                return res.json({ success: true, message: "Acesso Liberado!" });
+
+            } else {
+                return res.status(401).json({ success: false, message: "Usuário ou senha incorretos." });
+            }
+        } catch (err) {
+            console.error("Erro no login API:", err);
+            res.status(500).json({ success: false, message: "Erro interno no servidor." });
+        }
+    });
+
+    // --- ROTA DE REGISTRO WEB (Ativação de Key) ---
+    app.post('/web-registro', async (req, res) => {
+        const { usuario, senha, key, foto_url } = req.body; 
+        
+        if (!usuario || !senha || !key) {
+            return res.status(400).json({ success: false, message: "Campos obrigatórios faltando!" });
+        }
+
+        try {
+            // Verifica se a Key existe na tabela 'keys'
+            const [keyRows] = await dbMySQL.query("SELECT duracao_dias FROM `keys` WHERE `key_code` = ? AND status = 'disponivel'", [key]);
+            
+            if (keyRows.length === 0) {
+                return res.status(400).json({ success: false, message: "Key inválida ou já utilizada!" });
+            }
+
+            const dias = keyRows[0].duracao_dias;
+
+            // Cria o usuário e define a expiração somando os dias da key
+            await dbMySQL.query(
+                "INSERT INTO usuarios (usuario, senha, expiracao, foto_url) VALUES (?, ?, DATE_ADD(CURDATE(), INTERVAL ? DAY), ?)", 
+                [usuario, senha, dias, foto_url || null]
+            );
+
+            // Marca a key como usada
+            await dbMySQL.query("UPDATE `keys` SET status = 'usada', used_by = ? WHERE `key_code` = ?", [usuario, key]);
+
+            if (enviarLog) {
+                enviarLog(client, "✅ NOVO REGISTRO", `Usuário: ${usuario}\nKey: ${key}\nDias: ${dias}`, 0x00FF00, process.env.LOGO_URL);
+            }
+
+            return res.json({ success: true, message: "Conta criada e Key ativada!" });
+
+        } catch (err) {
+            if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ success: false, message: "Este nome de usuário já está em uso!" });
+            console.error("Erro no registro:", err);
+            res.status(500).json({ success: false, message: "Erro interno ao processar registro." });
+        }
+    });
+
+    const PORTA = process.env.PORT || 10000;
+    app.listen(PORTA, '0.0.0.0', () => console.log(`🚀 API XMP rodando na porta ${PORTA}`));
+}
+
+module.exports = { iniciarAPI };
