@@ -162,20 +162,47 @@ client.on('interactionCreate', async (interaction) => {
             // Enviar log
             enviarLog(client, "👤 NOVA CONTA CRIADA", `**Usuário:** ${usuario}\n**Discord:** <@${interaction.user.id}>\n**Plano:** ${planoAlvo.toUpperCase()}\n**Key:** \`${keyAtivacao}\``, 0x00FF00);
 
-            // Mensagem de sucesso
-            const embedSucesso = new EmbedBuilder()
-                .setTitle("✅ Conta Criada com Sucesso!")
+            // Mensagem de sucesso no canal (resposta do modal)
+            const embedCanal = new EmbedBuilder()
+                .setTitle("✅ Registro Concluído!")
                 .setColor(0x00FF00)
-                .setDescription(`Bem-vindo ao XMP, **${usuario}**!`)
+                .setDescription(`**${interaction.user.username}**, sua conta foi criada com sucesso!`)
                 .addFields(
-                    { name: "👤 Usuário", value: usuario, inline: true },
-                    { name: "🎯 Plano", value: planoAlvo.toUpperCase(), inline: true },
-                    { name: "📅 Validade", value: `${keyEncontrada.dias} dias`, inline: true }
+                    { name: "📧 Verifique sua DM", value: "Enviamos todos os detalhes para sua mensagem direta.", inline: false }
                 )
+                .setTimestamp();
+
+            // Mensagem completa na DM do usuário
+            const embedDM = new EmbedBuilder()
+                .setTitle("🎉 Bem-vindo ao XMP!")
+                .setColor(0x7D26CD)
+                .setDescription(`Olá **${usuario}**, sua conta foi criada com sucesso!`)
+                .setThumbnail(interaction.user.displayAvatarURL())
+                .addFields(
+                    { name: "👤 Seu Usuário", value: `\`${usuario}\``, inline: true },
+                    { name: "🔐 Sua Senha", value: `\`${senha}\``, inline: true },
+                    { name: "🎯 Seu Plano", value: `${planoAlvo.toUpperCase()}`, inline: true },
+                    { name: "📅 Validade", value: `${keyEncontrada.dias} dias`, inline: true },
+                    { name: "🔑 Key Usada", value: `\`${keyAtivacao}\``, inline: false },
+                    { name: "📅 Data de Registro", value: new Date().toLocaleDateString('pt-BR'), inline: true }
+                )
+                .setColor(0x00FF00)
                 .setFooter({ text: "Guarde seus dados em local seguro!" })
                 .setTimestamp();
 
-            return interaction.editReply({ embeds: [embedSucesso] });
+            // Enviar mensagem no canal
+            await interaction.editReply({ embeds: [embedCanal] });
+
+            // Tentar enviar DM
+            try {
+                await interaction.user.send({ embeds: [embedDM] });
+            } catch (dmError) {
+                // Se não conseguir enviar DM, informa no canal
+                await interaction.followUp({ 
+                    content: "⚠️ Não consegui enviar mensagem direta. Verifique se suas DMs estão abertas!", 
+                    ephemeral: true 
+                });
+            }
 
         } catch (error) {
             console.error(error);
