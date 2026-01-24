@@ -63,37 +63,76 @@ client.on("messageCreate", async (message) => {
 // --- LISTENER DE INTERAÇÕES (RESGATE E VENDAS) ---
 client.on('interactionCreate', async (interaction) => {
     
-    // 1. SISTEMA DE RESGATE (MODAL)
+    // 1. SISTEMA DE RESGATE (MODAL CRIAR CONTA)
     if (interaction.isButton() && interaction.customId === 'abrir_registro') {
         const modal = {
-            title: 'Ativação de Licença XMP',
-            custom_id: 'modal_resgate',
-            components: [{
-                type: 1,
-                components: [{
-                    type: 4,
-                    custom_id: 'input_key',
-                    label: "Digite sua Key:",
-                    style: 1,
-                    placeholder: "XMP-XXXX-XXXX",
-                    required: true
-                }]
-            }]
+            title: 'Criar nova conta',
+            custom_id: 'modal_criar_conta',
+            components: [
+                {
+                    type: 1,
+                    components: [{
+                        type: 4,
+                        custom_id: 'input_usuario',
+                        label: "Qual será seu usuário?",
+                        style: 1,
+                        placeholder: "Digite seu usuário",
+                        required: true
+                    }]
+                },
+                {
+                    type: 1,
+                    components: [{
+                        type: 4,
+                        custom_id: 'input_senha',
+                        label: "Qual será sua senha? (não esqueça!)",
+                        style: 1,
+                        placeholder: "Digite sua senha",
+                        required: true
+                    }]
+                },
+                {
+                    type: 1,
+                    components: [{
+                        type: 4,
+                        custom_id: 'input_key_ativacao',
+                        label: "Key de ativação",
+                        style: 1,
+                        placeholder: "Digite a key de ativação",
+                        required: true
+                    }]
+                }
+            ]
         };
         return await interaction.showModal(modal);
     }
 
-    if (interaction.isModalSubmit() && interaction.customId === 'modal_resgate') {
-        const keyInput = interaction.fields.getTextInputValue('input_key').trim();
-        const tabelas = ['keys_ext_adv', 'keys_ext_pre', 'keys_int_adv', 'keys_int_pre'];
+    if (interaction.isModalSubmit() && interaction.customId === 'modal_criar_conta') {
+        const usuario = interaction.fields.getTextInputValue('input_usuario').trim();
+        const senha = interaction.fields.getTextInputValue('input_senha').trim();
+        const keyAtivacao = interaction.fields.getTextInputValue('input_key_ativacao').trim();
+        
         await interaction.deferReply({ ephemeral: true });
 
         try {
+            // Validar campos
+            if (!usuario || !senha || !keyAtivacao) {
+                return interaction.editReply("❌ Todos os campos são obrigatórios!");
+            }
+
+            // Verificar se o usuário já existe
+            const [usuarioExistente] = await dbMySQL.query("SELECT * FROM usuarios WHERE usuario = ?", [usuario]);
+            if (usuarioExistente.length > 0) {
+                return interaction.editReply("❌ Este usuário já está em uso! Escolha outro.");
+            }
+
+            // Processar a key de ativação
+            const tabelas = ['keys_ext_adv', 'keys_ext_pre', 'keys_int_adv', 'keys_int_pre'];
             let keyEncontrada = null;
             let planoAlvo = "";
 
             for (const tabela of tabelas) {
-                const [rows] = await dbMySQL.query(`SELECT * FROM \`${tabela}\` WHERE \`codigo\` = ? AND \`status\` = 'disponivel'`, [keyInput]);
+                const [rows] = await dbMySQL.query(`SELECT * FROM \`${tabela}\` WHERE \`codigo\` = ? AND \`status\` = 'disponivel'`, [keyAtivacao]);
                 if (rows.length > 0) {
                     keyEncontrada = rows[0];
                     planoAlvo = tabela.replace('keys_', '');
@@ -101,22 +140,40 @@ client.on('interactionCreate', async (interaction) => {
                 }
             }
 
-            if (!keyEncontrada) return interaction.editReply("❌ Key inválida ou já utilizada.");
+            if (!keyEncontrada) {
+                return interaction.editReply("❌ Key de ativação inválida ou já utilizada.");
+            }
 
+            // Criar nova conta
             await dbMySQL.query(`
-                INSERT INTO usuarios (usuario, plano, expiracao) 
-                VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))
-                ON DUPLICATE KEY UPDATE 
-                plano = VALUES(plano), 
-                expiracao = IF(expiracao > NOW(), DATE_ADD(expiracao, INTERVAL ? DAY), DATE_ADD(NOW(), INTERVAL ? DAY))
-            `, [interaction.user.id, planoAlvo, keyEncontrada.dias, keyEncontrada.dias, keyEncontrada.dias]);
+                INSERT INTO usuarios (usuario, senha, plano, expiracao, discord_id) 
+                VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL ? DAY), ?)
+            `, [usuario, senha, planoAlvo, keyEncontrada.dias, interaction.user.id]);
 
-            await dbMySQL.query(`UPDATE \`keys_${planoAlvo}\` SET status = 'usada', usada_por = ? WHERE codigo = ?`, [interaction.user.tag, keyInput]);
-            enviarLog(client, "🔑 LICENÇA ATIVADA", `**Usuário:** <@${interaction.user.id}>\n**Plano:** ${planoAlvo.toUpperCase()}\n**Key:** \`${keyInput}\``, 0x00FF00);
-            return interaction.editReply(`✅ **Sucesso!** Plano **${planoAlvo.toUpperCase()}** ativado.`);
+            // Marcar key como usada
+            await dbMySQL.query(`UPDATE \`keys_${planoAlvo}\` SET status = 'usada', usada_por = ? WHERE codigo = ?`, [interaction.user.tag, keyAtivacao]);
+
+            // Enviar log
+            enviarLog(client, "👤 NOVA CONTA CRIADA", `**Usuário:** ${usuario}\n**Discord:** <@${interaction.user.id}>\n**Plano:** ${planoAlvo.toUpperCase()}\n**Key:** \`${keyAtivacao}\``, 0x00FF00);
+
+            // Mensagem de sucesso
+            const embedSucesso = new EmbedBuilder()
+                .setTitle("✅ Conta Criada com Sucesso!")
+                .setColor(0x00FF00)
+                .setDescription(`Bem-vindo ao XMP, **${usuario}**!`)
+                .addFields(
+                    { name: "👤 Usuário", value: usuario, inline: true },
+                    { name: "🎯 Plano", value: planoAlvo.toUpperCase(), inline: true },
+                    { name: "📅 Validade", value: `${keyEncontrada.dias} dias`, inline: true }
+                )
+                .setFooter({ text: "Guarde seus dados em local seguro!" })
+                .setTimestamp();
+
+            return interaction.editReply({ embeds: [embedSucesso] });
+
         } catch (error) {
             console.error(error);
-            return interaction.editReply("❌ Erro ao acessar o banco de dados.");
+            return interaction.editReply("❌ Erro ao criar conta. Tente novamente.");
         }
     }
 
@@ -184,5 +241,106 @@ client.once("ready", () => {
     console.log(`🤖 Bot logado como ${client.user.tag}`);
     iniciarAPI(dbMySQL, enviarLog, client);
 });
+
+// --- FUNÇÕES AUXILIARES DO MODAL ---
+
+async function processarKey(interaction, keyInput, dbMySQL, client, enviarLog) {
+    const tabelas = ['keys_ext_adv', 'keys_ext_pre', 'keys_int_adv', 'keys_int_pre'];
+    
+    let keyEncontrada = null;
+    let planoAlvo = "";
+
+    for (const tabela of tabelas) {
+        const [rows] = await dbMySQL.query(`SELECT * FROM \`${tabela}\` WHERE \`codigo\` = ? AND \`status\` = 'disponivel'`, [keyInput]);
+        if (rows.length > 0) {
+            keyEncontrada = rows[0];
+            planoAlvo = tabela.replace('keys_', '');
+            break;
+        }
+    }
+
+    if (!keyEncontrada) return interaction.editReply("❌ Key inválida ou já utilizada.");
+
+    await dbMySQL.query(`
+        INSERT INTO usuarios (usuario, plano, expiracao) 
+        VALUES (?, ?, DATE_ADD(NOW(), INTERVAL ? DAY))
+        ON DUPLICATE KEY UPDATE 
+        plano = VALUES(plano), 
+        expiracao = IF(expiracao > NOW(), DATE_ADD(expiracao, INTERVAL ? DAY), DATE_ADD(NOW(), INTERVAL ? DAY))
+    `, [interaction.user.id, planoAlvo, keyEncontrada.dias, keyEncontrada.dias, keyEncontrada.dias]);
+
+    await dbMySQL.query(`UPDATE \`keys_${planoAlvo}\` SET status = 'usada', usada_por = ? WHERE codigo = ?`, [interaction.user.tag, keyInput]);
+    enviarLog(client, "🔑 LICENÇA ATIVADA", `**Usuário:** <@${interaction.user.id}>\n**Plano:** ${planoAlvo.toUpperCase()}\n**Key:** \`${keyInput}\``, 0x00FF00);
+    return interaction.editReply(`✅ **Sucesso!** Plano **${planoAlvo.toUpperCase()}** ativado.`);
+}
+
+async function consultarStatus(interaction, dbMySQL) {
+    const [rows] = await dbMySQL.query("SELECT plano, expiracao FROM usuarios WHERE usuario = ?", [interaction.user.id]);
+    
+    if (rows.length === 0) {
+        return interaction.editReply("❌ Você não possui nenhuma licença ativa.");
+    }
+    
+    const usuario = rows[0];
+    const expiracao = new Date(usuario.expiracao);
+    const agora = new Date();
+    const diasRestantes = Math.ceil((expiracao - agora) / (1000 * 60 * 60 * 24));
+    
+    const embed = new EmbedBuilder()
+        .setTitle("📊 Seu Status")
+        .setColor(0x7D26CD)
+        .addFields(
+            { name: "🎯 Plano", value: usuario.plano.toUpperCase(), inline: true },
+            { name: "📅 Expiração", value: expiracao.toLocaleDateString('pt-BR'), inline: true },
+            { name: "⏰ Dias Restantes", value: diasRestantes > 0 ? `${diasRestantes} dias` : "Expirado", inline: true }
+        )
+        .setTimestamp();
+    
+    return interaction.editReply({ embeds: [embed] });
+}
+
+async function mostrarPlanos(interaction, dbMySQL) {
+    const planos = [
+        { nome: "Internal Advanced", tabela: "keys_int_adv", emoji: "🔧" },
+        { nome: "Internal Premium", tabela: "keys_int_pre", emoji: "⭐" },
+        { nome: "External Advanced", tabela: "keys_ext_adv", emoji: "🌐" },
+        { nome: "External Premium", tabela: "keys_ext_pre", emoji: "💎" }
+    ];
+    
+    const embed = new EmbedBuilder()
+        .setTitle("📦 Planos Disponíveis")
+        .setColor(0x7D26CD)
+        .setDescription("Escolha o plano ideal para você:");
+    
+    for (const plano of planos) {
+        const [estoque] = await dbMySQL.query(`SELECT COUNT(*) as total FROM ${plano.tabela} WHERE status = 'disponivel'`);
+        embed.addFields({
+            name: `${plano.emoji} ${plano.nome}`,
+            value: `Estoque: ${estoque[0].total} keys disponíveis`,
+            inline: true
+        });
+    }
+    
+    embed.setFooter({ text: "Use !painel para comprar ou ativar uma key" });
+    return interaction.editReply({ embeds: [embed] });
+}
+
+async function mostrarSuporte(interaction) {
+    const embed = new EmbedBuilder()
+        .setTitle("🛠️ Central de Suporte")
+        .setColor(0xFF6B6B)
+        .setDescription("Precisa de ajuda? Estamos aqui para você!")
+        .addFields(
+            { name: "📧 Email", value: "suporte@xmp.com", inline: true },
+            { name: "💬 Discord", value: "discord.gg/xmp", inline: true },
+            { name: "📱 WhatsApp", value: "+55 11 99999-9999", inline: true },
+            { name: "⏰ Horário", value: "Seg-Sex: 9h-18h", inline: false },
+            { name: "🔗 Links Úteis", value: "[Documentação](https://docs.xmp.com) | [Tutoriais](https://tutoriais.xmp.com)", inline: false }
+        )
+        .setFooter({ text: "Tempo médio de resposta: 2-4 horas" })
+        .setTimestamp();
+    
+    return interaction.editReply({ embeds: [embed] });
+}
 
 client.login(process.env.TOKEN);
