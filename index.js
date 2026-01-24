@@ -120,6 +120,12 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.editReply("❌ Todos os campos são obrigatórios!");
             }
 
+            // Verificar se a tabela tem a coluna usuario
+            const [columns] = await dbMySQL.query("SHOW COLUMNS FROM usuarios LIKE 'usuario'");
+            if (columns.length === 0) {
+                return interaction.editReply("❌ A tabela `usuarios` precisa ser migrada. Use `!migrar` primeiro.");
+            }
+
             // Verificar se o usuário já existe
             const [usuarioExistente] = await dbMySQL.query("SELECT * FROM usuarios WHERE usuario = ?", [usuario]);
             if (usuarioExistente.length > 0) {
