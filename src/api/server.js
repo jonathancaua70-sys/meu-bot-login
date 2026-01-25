@@ -18,14 +18,14 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
 
     // --- ROTA DE LOGIN DO PAINEL (.EXE) ---
     app.post('/login', async (req, res) => {
-        let { usuario, senha, hwid, ip } = req.body;
+        let { usuario, senha, hwid, ip, painel_alvo } = req.body;
         
         // Captura o IP real do usuário através do proxy do Render
         const ipReal = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
         const finalIp = (ip === "0.0.0.0" || !ip) ? ipReal : ip;
 
-        if (!usuario || !senha || !hwid) {
-            return res.status(400).json({ success: false, message: "Dados incompletos." });
+        if (!usuario || !senha || !hwid || !painel_alvo) {
+            return res.status(400).json({ success: false, message: "Dados incompletos. painel_alvo é obrigatório." });
         }
 
         try {
@@ -40,29 +40,42 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
                     return res.status(403).json({ success: false, message: "Sua licença expirou!" });
                 }
 
-                // 2. Vincula HWID se estiver vazio (Primeiro Acesso)
+                // 2. VALIDAÇÃO DE PLANO - Verifica se o usuário tem acesso ao painel solicitado
+                if (userDb.plano !== painel_alvo) {
+                    return res.status(403).json({ 
+                        success: false, 
+                        message: `Acesso Negado: Sua key é válida apenas para o painel ${userDb.plano.toUpperCase()}` 
+                    });
+                }
+
+                // 3. VALIDAÇÃO DE HWID - Vincula HWID se estiver vazio (Primeiro Acesso)
                 if (!userDb.hwid_vinculado) {
                     await dbMySQL.query("UPDATE usuarios SET hwid_vinculado = ?, ip_vinculado = ? WHERE usuario = ?", [hwid, finalIp, usuario]);
                     
                     if (enviarLog) {
-                        enviarLog(client, "💻 NOVO HWID VINCULADO", `Usuário: ${usuario}\nPC: ${hwid}`, 0xFFFF00, process.env.LOGO_URL);
+                        enviarLog(client, "💻 NOVO HWID VINCULADO", `Usuário: ${usuario}\nPlano: ${userDb.plano}\nPC: ${hwid}`, 0xFFFF00, process.env.LOGO_URL);
                     }
                     return res.json({ success: true, message: "PC Vinculado com sucesso!" });
                 }
 
-                // 3. Verifica se o HWID é o mesmo que está no banco
+                // 4. VALIDAÇÃO DE HWID - Verifica se o HWID é o mesmo que está no banco
                 if (userDb.hwid_vinculado !== hwid) {
-                    return res.status(403).json({ success: false, message: "Usuário já vinculado a outro PC!" });
+                    return res.status(403).json({ success: false, message: "Acesso Negado: HWID não corresponde ao PC vinculado!" });
                 }
 
-                // 4. Atualiza IP e libera acesso
+                // 5. Atualiza IP e libera acesso
                 await dbMySQL.query("UPDATE usuarios SET ip_vinculado = ? WHERE usuario = ?", [finalIp, usuario]);
                 
                 // Salva no log de acesso que você criou
-                await dbMySQL.query("INSERT INTO logs_acesso (usuario, acao, ip, hwid) VALUES (?, ?, ?, ?)", 
-                    [usuario, 'Login com Sucesso', finalIp, hwid]);
+                await dbMySQL.query("INSERT INTO logs_acesso (usuario, acao, ip, hwid, painel) VALUES (?, ?, ?, ?, ?)", 
+                    [usuario, 'Login com Sucesso', finalIp, hwid, painel_alvo]);
 
-                return res.json({ success: true, message: "Acesso Liberado!" });
+                return res.json({ 
+                    success: true, 
+                    message: "Acesso Liberado!",
+                    plano: userDb.plano,
+                    expiracao: userDb.expiracao
+                });
 
             } else {
                 return res.status(401).json({ success: false, message: "Usuário ou senha incorretos." });
@@ -110,6 +123,51 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
             if (err.code === 'ER_DUP_ENTRY') return res.status(400).json({ success: false, message: "Este nome de usuário já está em uso!" });
             console.error("Erro no registro:", err);
             res.status(500).json({ success: false, message: "Erro interno ao processar registro." });
+        }
+    });
+
+    // --- ROTA DE VERIFICAÇÃO DE ACESSO AO PAINEL ---
+    app.post('/verificar-acesso', async (req, res) => {
+        const { usuario, painel_alvo } = req.body;
+        
+        if (!usuario || !painel_alvo) {
+            return res.status(400).json({ success: false, message: "Dados incompletos." });
+        }
+
+        try {
+            const [rows] = await dbMySQL.query("SELECT plano, expiracao, hwid_vinculado FROM usuarios WHERE usuario = ?", [usuario]);
+
+            if (rows.length === 0) {
+                return res.status(404).json({ success: false, message: "Usuário não encontrado." });
+            }
+
+            const userDb = rows[0];
+
+            // Verifica se a licença expirou
+            if (new Date() > new Date(userDb.expiracao)) {
+                return res.status(403).json({ success: false, message: "Sua licença expirou!" });
+            }
+
+            // Verifica se o plano corresponde ao painel solicitado
+            if (userDb.plano !== painel_alvo) {
+                return res.status(403).json({ 
+                    success: false, 
+                    message: `Acesso Negado: Sua key é válida apenas para o painel ${userDb.plano.toUpperCase()}`,
+                    plano_permitido: userDb.plano
+                });
+            }
+
+            return res.json({ 
+                success: true, 
+                message: "Acesso permitido!",
+                plano: userDb.plano,
+                expiracao: userDb.expiracao,
+                hwid_vinculado: !!userDb.hwid_vinculado
+            });
+
+        } catch (err) {
+            console.error("Erro na verificação de acesso:", err);
+            res.status(500).json({ success: false, message: "Erro interno no servidor." });
         }
     });
 
