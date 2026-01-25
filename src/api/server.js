@@ -18,6 +18,9 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
 
     // --- ROTA DE LOGIN DO PAINEL (.EXE) ---
     app.post('/login', async (req, res) => {
+        // 4. Logs de Debug - Verificar dados recebidos
+        console.log('Dados recebidos:', req.body);
+        
         let { usuario, senha, hwid, ip, painel_alvo } = req.body;
         
         // Captura o IP real do usuário através do proxy do Render
@@ -29,8 +32,8 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
         }
 
         try {
-            // Busca o usuário na tabela que você criou no HeidiSQL
-            const [rows] = await dbMySQL.query("SELECT * FROM usuarios WHERE usuario = ? AND senha = ?", [usuario, senha]);
+            // 2. Sincronização de Colunas - Usar nomes exatos do banco
+            const [rows] = await dbMySQL.query("SELECT usuario, senha, plano, expiracao, hwid_vinculado, ip_vinculado FROM usuarios WHERE usuario = ? AND senha = ?", [usuario, senha]);
 
             if (rows.length > 0) {
                 const userDb = rows[0];
@@ -40,33 +43,33 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
                     return res.status(403).json({ success: false, message: "Sua licença expirou!" });
                 }
 
-                // 2. VALIDAÇÃO DE PLANO - Verifica se o usuário tem acesso ao painel solicitado
+                // 3. Lógica de Bloqueio (4 Painéis) - Comparar plano com painel_alvo
                 if (userDb.plano !== painel_alvo) {
                     return res.status(403).json({ 
                         success: false, 
-                        message: `Acesso Negado: Sua key é válida apenas para o painel ${userDb.plano.toUpperCase()}` 
+                        message: 'Seu plano não permite acesso a este painel'
                     });
                 }
 
-                // 3. VALIDAÇÃO DE HWID - Vincula HWID se estiver vazio (Primeiro Acesso)
+                // VALIDAÇÃO DE HWID - Vincula HWID se estiver vazio (Primeiro Acesso)
                 if (!userDb.hwid_vinculado) {
                     await dbMySQL.query("UPDATE usuarios SET hwid_vinculado = ?, ip_vinculado = ? WHERE usuario = ?", [hwid, finalIp, usuario]);
                     
                     if (enviarLog) {
-                        enviarLog(client, "💻 NOVO HWID VINCULADO", `Usuário: ${usuario}\nPlano: ${userDb.plano}\nPC: ${hwid}`, 0xFFFF00, process.env.LOGO_URL);
+                        enviarLog(client, " NOVO HWID VINCULADO", `Usuário: ${usuario}\nPlano: ${userDb.plano}\nPC: ${hwid}`, 0xFFFF00);
                     }
                     return res.json({ success: true, message: "PC Vinculado com sucesso!" });
                 }
 
-                // 4. VALIDAÇÃO DE HWID - Verifica se o HWID é o mesmo que está no banco
+                // VALIDAÇÃO DE HWID - Verifica se o HWID é o mesmo que está no banco
                 if (userDb.hwid_vinculado !== hwid) {
                     return res.status(403).json({ success: false, message: "Acesso Negado: HWID não corresponde ao PC vinculado!" });
                 }
 
-                // 5. Atualiza IP e libera acesso
+                // Atualiza IP e libera acesso
                 await dbMySQL.query("UPDATE usuarios SET ip_vinculado = ? WHERE usuario = ?", [finalIp, usuario]);
                 
-                // Salva no log de acesso que você criou
+                // Salva no log de acesso
                 await dbMySQL.query("INSERT INTO logs_acesso (usuario, acao, ip, hwid, painel) VALUES (?, ?, ?, ?, ?)", 
                     [usuario, 'Login com Sucesso', finalIp, hwid, painel_alvo]);
 
