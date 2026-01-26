@@ -6,6 +6,17 @@ app.set('trust proxy', true);
 
 // Esta função é chamada no seu index.js
 function iniciarAPI(dbMySQL, enviarLog, client) {
+    // 4. Try/Catch no Banco - Verificar conexão
+    try {
+        if (!dbMySQL) {
+            console.error('ERRO: Banco de dados não conectado');
+            return;
+        }
+        console.log('✅ Banco de dados conectado com sucesso');
+    } catch (dbError) {
+        console.error('ERRO ao conectar banco:', dbError);
+        // Não retorna, continua mesmo sem banco
+    }
 
     // --- ROTA HEALTH CHECK (Para o Render saber que o bot está vivo) ---
     app.get('/', (req, res) => {
@@ -18,8 +29,8 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
 
     // --- ROTA DE LOGIN DO PAINEL (.EXE) ---
     app.post('/login', async (req, res) => {
-        // 4. Logs de Debug - Verificar dados recebidos
-        console.log('Dados recebidos:', req.body);
+        // 4. Logs de Debug - Monitorar tentativas de login
+        console.log('Tentativa de login:', req.body);
         
         let { usuario, senha, hwid, ip, painel_alvo } = req.body;
         
@@ -32,7 +43,7 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
         }
 
         try {
-            // 2. Sincronização de Colunas - Usar nomes exatos do banco
+            // 2. Corrigir Query de Login - Usar colunas exatas do HeidiSQL
             const [rows] = await dbMySQL.query("SELECT usuario, senha, plano, expiracao, hwid_vinculado, ip_vinculado FROM usuarios WHERE usuario = ? AND senha = ?", [usuario, senha]);
 
             if (rows.length > 0) {
@@ -117,7 +128,7 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
             await dbMySQL.query("UPDATE `keys` SET status = 'usada', used_by = ? WHERE `key_code` = ?", [usuario, key]);
 
             if (enviarLog) {
-                enviarLog(client, "✅ NOVO REGISTRO", `Usuário: ${usuario}\nKey: ${key}\nDias: ${dias}`, 0x00FF00, process.env.LOGO_URL);
+                enviarLog(client, "✅ NOVO REGISTRO", `Usuário: ${usuario}\nKey: ${key}\nDias: ${dias}`, 0x00FF00);
             }
 
             return res.json({ success: true, message: "Conta criada e Key ativada!" });
@@ -174,8 +185,18 @@ function iniciarAPI(dbMySQL, enviarLog, client) {
         }
     });
 
-    const PORTA = process.env.PORT || 10000;
-    app.listen(PORTA, '0.0.0.0', () => console.log(`🚀 API XMP rodando na porta ${PORTA}`));
+    // 2. Verificação de Porta - Usar porta 3000 como padrão
+    const PORTA = process.env.PORT || 3000;
+    
+    // 3. Log de Inicialização - Mensagem clara no terminal
+    app.listen(PORTA, '0.0.0.0', () => {
+        console.log(`================================`);
+        console.log(`🟢 SERVIDOR ONLINE NA PORTA ${PORTA}`);
+        console.log(`🌐 URL: http://localhost:${PORTA}`);
+        console.log(`📊 Health: http://localhost:${PORTA}/`);
+        console.log(`================================`);
+        console.log('Servidor iniciado com sucesso!');
+    });
 }
 
 module.exports = { iniciarAPI };
