@@ -180,9 +180,18 @@ client.on('interactionCreate', async (interaction) => {
 });
 
 // --- INICIALIZAÇÃO ---
+
+// 1. Iniciamos a API IMEDIATAMENTE para o Render detectar a porta aberta
+try {
+    iniciarAPI(dbMySQL, enviarLog, client);
+    console.log("🚀 Servidor API iniciado para o Render.");
+} catch (error) {
+    console.error("❌ Erro ao iniciar a API:", error);
+}
+
+// 2. Depois iniciamos o Bot do Discord
 client.once("ready", () => {
     console.log(`🤖 Bot logado como ${client.user.tag}`);
-    iniciarAPI(dbMySQL, enviarLog, client);
 });
 
 client.login(process.env.TOKEN);
